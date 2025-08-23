@@ -60,4 +60,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3") // For coroutines
     implementation("com.google.android.gms:play-services-location:21.2.0") // Or the latest version
     implementation("androidx.compose.material:material-icons-extended-android:1.6.7") // Or the latest version
+    implementation("androidx.compose.foundation:foundation:1.7.0-beta01") // Or the latest stable
 }
