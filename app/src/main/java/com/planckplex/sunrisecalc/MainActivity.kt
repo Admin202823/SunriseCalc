@@ -16,19 +16,27 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.navigation.NavController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import com.planckplex.sunrisecalc.data.SettingsDataStore
 import com.planckplex.sunrisecalc.ui.theme.SunriseCalcTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,10 +60,11 @@ data class MoonData(
     val moonset: String?,
     val phase: MoonPhaseData?,
     val elevation: Double?,
-    val highMoonElevation: Double?, // Nouveau
-    val highMoonTime: String?,     // Nouveau
-    val moonriseAzimuth: Double?, // Nouveau
-    val moonsetAzimuth: Double?   // Nouveau
+    val highMoonElevation: Double?,
+    val highMoonTime: String?,
+    val moonriseAzimuth: Double?,
+    val moonsetAzimuth: Double?,
+    val currentMoonAzimuth: Double?
 )
 
 data class SunMoonEventData(
@@ -69,10 +78,11 @@ data class SunMoonEventData(
     val timezone: String
 )
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     private var qthForComposable by mutableStateOf("")
     private var fetchedSunMoonData by mutableStateOf<SunMoonEventData?>(null)
+    private lateinit var settingsDataStore: SettingsDataStore
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -86,48 +96,76 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        settingsDataStore = SettingsDataStore(this)
         enableEdgeToEdge()
         setContent {
             SunriseCalcTheme {
-                val pagerState = rememberPagerState(pageCount = { 2 })
-                val isPagerSwipeEnabled by remember {
-                    derivedStateOf { fetchedSunMoonData != null }
+                val navController = rememberNavController()
+                NavHost(navController = navController, startDestination = "main") {
+                    composable("main") {
+                        MainScreen(navController)
+                    }
+                    composable("settings") {
+                        SettingsScreen(navController, settingsDataStore)
+                    }
                 }
+            }
+        }
+    }
 
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier
-                            .padding(innerPadding)
-                            .fillMaxSize(),
-                        userScrollEnabled = isPagerSwipeEnabled
-                    ) { page ->
-                        when (page) {
-                            0 -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .verticalScroll(rememberScrollState())
-                                        .padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    SunTimesFetcherScreen(
-                                        initialQth = qthForComposable,
-                                        onRequestLocationPermission = { requestLocationPermission() },
-                                        onDataFetched = { data ->
-                                            fetchedSunMoonData = data
-                                        }
-                                    )
-                                    Spacer(Modifier.height(32.dp))
-                                    EventInfoScreen()
-                                }
-                            }
-                            1 -> {
-                                SecondPageContent(
-                                    initialSunMoonData = fetchedSunMoonData
-                                )
-                            }
+    @Composable
+    fun MainScreen(navController: NavController) {
+        val pagerState = rememberPagerState(pageCount = { 2 })
+        val isPagerSwipeEnabled by remember {
+            derivedStateOf { fetchedSunMoonData != null }
+        }
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text("SunriseCalc") },
+                    actions = {
+                        IconButton(onClick = { navController.navigate("settings") }) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Settings")
                         }
+                    }
+                )
+            }
+        ) { innerPadding ->
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize(),
+                userScrollEnabled = isPagerSwipeEnabled
+            ) { page ->
+                when (page) {
+                    0 -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            SunTimesFetcherScreen(
+                                initialQth = qthForComposable,
+                                onRequestLocationPermission = { requestLocationPermission() },
+                                onDataFetched = { data ->
+                                    fetchedSunMoonData = data
+                                },
+                                settingsDataStore = settingsDataStore,
+                                sunMoonEventData = fetchedSunMoonData
+                            )
+                            Spacer(Modifier.height(32.dp))
+                            EventInfoScreen()
+                        }
+                    }
+                    1 -> {
+                        SecondPageContent(
+                            initialSunMoonData = fetchedSunMoonData
+                        )
                     }
                 }
             }
@@ -210,12 +248,14 @@ fun SunTimesFetcherScreen(
     modifier: Modifier = Modifier,
     initialQth: String,
     onRequestLocationPermission: () -> Unit,
-    onDataFetched: (SunMoonEventData) -> Unit
+    onDataFetched: (SunMoonEventData?) -> Unit,
+    settingsDataStore: SettingsDataStore,
+    sunMoonEventData: SunMoonEventData?
 ) {
     var qthInput by remember(initialQth) { mutableStateOf(initialQth) }
-    var sunEventDisplayData by remember { mutableStateOf<SunMoonEventData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    val serverUrl by settingsDataStore.serverUrl.collectAsState(initial = "")
 
     val client = remember { OkHttpClient() }
 
@@ -254,13 +294,16 @@ fun SunTimesFetcherScreen(
                 if (qthInput.isNotBlank()) {
                     isLoading = true
                     errorMessage = null
-                    sunEventDisplayData = null
+                    onDataFetched(null)
 
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
+                             if (serverUrl.isBlank()) {
+                                throw Exception("Server URL is not set")
+                            }
                             val sunDataDeferred = async {
                                 val request = Request.Builder()
-                                    .url("http://planckplex.site:2630/sun?qth=${qthInput.trim()}")
+                                    .url("$serverUrl/sun?qth=${qthInput.trim()}")
                                     .build()
                                 client.newCall(request).execute().use { response ->
                                     if (!response.isSuccessful) throw Exception("Erreur données solaires: ${response.code}")
@@ -289,7 +332,7 @@ fun SunTimesFetcherScreen(
 
                             val moonDataDeferred = async {
                                 val request = Request.Builder()
-                                    .url("http://planckplex.site:2630/moon?qth=${qthInput.trim()}")
+                                    .url("$serverUrl/moon?qth=${qthInput.trim()}")
                                     .build()
                                 client.newCall(request).execute().use { response ->
                                     if (!response.isSuccessful) throw Exception("Erreur données lunaires: ${response.code}")
@@ -323,7 +366,8 @@ fun SunTimesFetcherScreen(
                                         highMoonElevation = if (moonObj.has("high_moon_elevation")) moonObj.optDouble("high_moon_elevation") else null,
                                         highMoonTime = if (moonObj.has("high_moon_time") && !moonObj.isNull("high_moon_time")) moonObj.getString("high_moon_time") else null,
                                         moonriseAzimuth = if (moonObj.has("moonrise_azimuth")) moonObj.optDouble("moonrise_azimuth") else null,
-                                        moonsetAzimuth = if (moonObj.has("moonset_azimuth")) moonObj.optDouble("moonset_azimuth") else null
+                                        moonsetAzimuth = if (moonObj.has("moonset_azimuth")) moonObj.optDouble("moonset_azimuth") else null,
+                                        currentMoonAzimuth = if (moonObj.has("current_moon_azimuth")) moonObj.optDouble("current_moon_azimuth") else null
                                     )
                                 }
                             }
@@ -343,7 +387,6 @@ fun SunTimesFetcherScreen(
                             )
 
                             withContext(Dispatchers.Main) {
-                                sunEventDisplayData = combinedData
                                 onDataFetched(combinedData)
                                 isLoading = false
                             }
@@ -382,7 +425,7 @@ fun SunTimesFetcherScreen(
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
-        sunEventDisplayData?.let { data ->
+        sunMoonEventData?.let { data ->
             SunEventDisplay(
                 date = data.date,
                 timezone = data.timezone,
@@ -392,6 +435,68 @@ fun SunTimesFetcherScreen(
                 civilDawn = data.civilDawn,
                 sunrise = data.sunrise
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(navController: NavController, settingsDataStore: SettingsDataStore) {
+    val scope = rememberCoroutineScope()
+    val serverUrl by settingsDataStore.serverUrl.collectAsState(initial = "")
+    var urlInput by remember(serverUrl) { mutableStateOf(serverUrl) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings") },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .padding(16.dp)
+        ) {
+            OutlinedTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it },
+                label = { Text("Server URL") },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("http://your-server-ip:2630") }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            settingsDataStore.saveServerUrl("")
+                            urlInput = ""
+                        }
+                    }
+                ) {
+                    Text("Clear")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            settingsDataStore.saveServerUrl(urlInput)
+                            navController.navigateUp()
+                        }
+                    }
+                ) {
+                    Text("Save")
+                }
+            }
         }
     }
 }
@@ -513,6 +618,10 @@ fun SecondPageContent(
                             Text("Élévation Actuelle: ${String.format(Locale.US, "%.2f", elev)}°", style = MaterialTheme.typography.bodyLarge)
                         }
 
+                        currentMoonData.currentMoonAzimuth?.let { azimuth ->
+                            Text("Azimut Actuel: ${String.format(Locale.US, "%.2f", azimuth)}°", style = MaterialTheme.typography.bodyLarge)
+                        }
+
                         currentMoonData.phase?.let { phase ->
                             Divider(modifier = Modifier.padding(vertical = 4.dp))
                             Text("Phase Lunaire:", style = MaterialTheme.typography.titleMedium)
@@ -554,7 +663,8 @@ fun DefaultPreviewPage1DualFetchExtended() {
             HorizontalPager(state = pagerState, modifier = Modifier.padding(innerPadding).fillMaxSize(), userScrollEnabled = true) { page ->
                 when (page) {
                     0 -> Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        SunTimesFetcherScreen(initialQth = "IM58KS", onRequestLocationPermission = {}, onDataFetched = {})
+                        val context = LocalContext.current
+                        SunTimesFetcherScreen(initialQth = "IM58KS", onRequestLocationPermission = {}, onDataFetched = {}, settingsDataStore = SettingsDataStore(context), sunMoonEventData = null)
                         Spacer(Modifier.height(32.dp))
                         EventInfoScreen()
                     }
@@ -567,7 +677,8 @@ fun DefaultPreviewPage1DualFetchExtended() {
                                 phase = MoonPhaseData(emoji = "🌖", name = "Gibbeuse décroissante", percent = 64.2),
                                 elevation = -52.08,
                                 highMoonElevation = 44.82, highMoonTime = "05:12:00",
-                                moonriseAzimuth = 91.06, moonsetAzimuth = 264.52
+                                moonriseAzimuth = 91.06, moonsetAzimuth = 264.52,
+                                currentMoonAzimuth = 180.0
                             ),
                             qth = "IM58KS", timezone = "UTC+1"
                         )
@@ -591,7 +702,8 @@ fun PreviewPage2ExtendedCombined() {
                     phase = MoonPhaseData(emoji = "🌖", name = "Gibbeuse décroissante", percent = 64.2),
                     elevation = -52.08,
                     highMoonElevation = 44.82, highMoonTime = "05:12:00",
-                    moonriseAzimuth = 91.06, moonsetAzimuth = 264.52
+                    moonriseAzimuth = 91.06, moonsetAzimuth = 264.52,
+                    currentMoonAzimuth = 180.0
                 ),
                 qth = "IM58KS", timezone = "UTC+1"
             )
